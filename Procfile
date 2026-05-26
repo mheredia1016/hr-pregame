@@ -1,1 +1,1 @@
-worker: python hr_pregame_one_hour_alert.py
+web: uvicorn app:app --host 0.0.0.0 --port $PORT
