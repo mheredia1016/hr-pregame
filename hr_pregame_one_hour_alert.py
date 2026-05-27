@@ -10,6 +10,9 @@ WEBHOOK_URL = os.getenv("HR_PREGAME_WEBHOOK_URL", "").strip()
 
 TZ = ZoneInfo("America/Chicago")
 
+ALLOWED_START_HOUR = 10
+ALLOWED_END_HOUR = 23
+
 WINDOW_MINUTES = int(os.getenv("PREGAME_WINDOW_MINUTES", "60"))
 WINDOW_GRACE_MINUTES = int(os.getenv("PREGAME_GRACE_MINUTES", "20"))
 STATE_FILE = Path(os.getenv("PREGAME_STATE_FILE", "/tmp/hr_pregame_posted_games.json"))
@@ -232,6 +235,12 @@ def make_game_embed(game, hitters, pitcher_map):
     }
 
 def main():
+        now_ct = datetime.now(TZ)
+
+    # Only run between 10 AM and 11:59 PM CT
+    if now_ct.hour < ALLOWED_START_HOUR or now_ct.hour > ALLOWED_END_HOUR:
+        print("[INFO] Outside allowed hours. Skipping.")
+        return
     state = cleanup_state(load_state())
 
     games_data = get_json("/api/games")
