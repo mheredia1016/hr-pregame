@@ -235,12 +235,13 @@ def make_game_embed(game, hitters, pitcher_map):
     }
 
 def main():
-        now_ct = datetime.now(TZ)
+    now_ct = datetime.now(TZ)
 
     # Only run between 10 AM and 11:59 PM CT
     if now_ct.hour < ALLOWED_START_HOUR or now_ct.hour > ALLOWED_END_HOUR:
         print("[INFO] Outside allowed hours. Skipping.")
         return
+
     state = cleanup_state(load_state())
 
     games_data = get_json("/api/games")
