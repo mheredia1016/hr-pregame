@@ -1,36 +1,19 @@
-# 1-Hour Pregame HR Discord Alert
+# Official Lineup HR Pregame Alert
 
-Run this every 15 minutes. It only posts games starting around 1 hour from now and skips games already posted.
+Runs every few minutes, but only posts when official MLB lineups are available.
 
-## Railway Variables
-
-```bash
+Railway variables:
 HR_API_BASE=https://hr-api-production-fed2.up.railway.app
-HR_PREGAME_WEBHOOK_URL=https://discord.com/api/webhooks/XXXXX/YYYYY
-PREGAME_WINDOW_MINUTES=60
-PREGAME_GRACE_MINUTES=20
-MIN_HR_SCORE=45
+HR_PREGAME_WEBHOOK_URL=your Discord webhook
+LINEUP_WINDOW_MINUTES=150
+ALLOW_UNCONFIRMED_LINEUPS=false
 TOP_PER_TEAM=3
-```
+MIN_HR_SCORE=45
+ALLOWED_START_HOUR=10
+ALLOWED_END_HOUR=23
 
-## Railway Cron
-
-Run every 15 minutes:
-
-```cron
-*/15 * * * *
-```
+Cron:
+*/5 * * * *
 
 Start command:
-
-```bash
-python hr_pregame_one_hour_alert.py
-```
-
-## Output
-
-Each alert includes:
-- top 3 HR targets per team
-- hitter kHR, xwOBAcon, ISO, HH%, SwStr%
-- opposing pitcher HH allowed, FB%, Brl/BIP%, xwOBA
-- possible 2-man HR parlay
+python hr_lineup_pregame_alert.py

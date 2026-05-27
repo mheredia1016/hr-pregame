@@ -1,1 +1,1 @@
-web: uvicorn app:app --host 0.0.0.0 --port $PORT
+worker: python hr_lineup_pregame_alert.py
