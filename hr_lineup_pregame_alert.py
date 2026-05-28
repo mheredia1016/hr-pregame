@@ -7,13 +7,10 @@ API_BASE = os.getenv("HR_API_BASE", "https://hr-api-production-fed2.up.railway.a
 WEBHOOK_URL = os.getenv("HR_PREGAME_WEBHOOK_URL", "").strip()
 TZ = ZoneInfo("America/Chicago")
 
-LINEUP_WINDOW_MINUTES = int(os.getenv("LINEUP_WINDOW_MINUTES", "150"))
 ALLOW_UNCONFIRMED_LINEUPS = os.getenv("ALLOW_UNCONFIRMED_LINEUPS", "false").lower() == "true"
 STATE_FILE = Path(os.getenv("PREGAME_STATE_FILE", "/tmp/hr_lineup_pregame_posted_games.json"))
 TOP_PER_TEAM = int(os.getenv("TOP_PER_TEAM", "3"))
 MIN_HR_SCORE = float(os.getenv("MIN_HR_SCORE", "45"))
-ALLOWED_START_HOUR = int(os.getenv("ALLOWED_START_HOUR", "10"))
-ALLOWED_END_HOUR = int(os.getenv("ALLOWED_END_HOUR", "23"))
 
 def safe_float(v, default=0.0):
     try:
@@ -73,12 +70,6 @@ def already_posted(state, game_pk):
 
 def mark_posted(state, game_pk):
     state.setdefault("posted",{})[str(game_pk)] = datetime.now(TZ).isoformat()
-
-def game_in_lineup_window(game):
-    dt = parse_game_time(game.get("gameDate"))
-    if not dt: return False
-    now = datetime.now(TZ)
-    return now <= dt <= now + timedelta(minutes=LINEUP_WINDOW_MINUTES)
 
 def player_id_int(x):
     try: return int(x)
@@ -265,11 +256,6 @@ def make_game_embed(game, hitters, pitcher_map, lineup_map):
     }
 
 def main():
-    now_ct = datetime.now(TZ)
-    if now_ct.hour < ALLOWED_START_HOUR or now_ct.hour > ALLOWED_END_HOUR:
-        print("[INFO] Outside allowed hours. Skipping.")
-        return
-
     state = cleanup_state(load_state())
     games_data = get_json("/api/games")
     games = games_data.get("games", games_data if isinstance(games_data, list) else [])
@@ -278,7 +264,7 @@ def main():
 
     for game in games:
         game_pk = game.get("gamePk")
-        if not game_pk or already_posted(state, game_pk) or not game_in_lineup_window(game):
+        if not game_pk or already_posted(state, game_pk):
             continue
         lineup_map = get_official_lineups(game_pk)
         if not lineup_map.get("confirmed") and not ALLOW_UNCONFIRMED_LINEUPS:
