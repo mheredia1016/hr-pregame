@@ -1,19 +1,14 @@
-# Official Lineup HR Pregame Alert
+# HR Lineup Pregame Alert With Same-Team Stacks
 
-Runs every few minutes, but only posts when official MLB lineups are available.
+Keeps Top 3 HR targets per team and adds:
+- Best HR Stack
+- Alternate Stack
 
-Railway variables:
-HR_API_BASE=https://hr-api-production-fed2.up.railway.app
-HR_PREGAME_WEBHOOK_URL=your Discord webhook
-LINEUP_WINDOW_MINUTES=150
-ALLOW_UNCONFIRMED_LINEUPS=false
-TOP_PER_TEAM=3
-MIN_HR_SCORE=45
-ALLOWED_START_HOUR=10
-ALLOWED_END_HOUR=23
+No new Railway variables required.
 
-Cron:
-*/5 * * * *
-
-Start command:
-python hr_lineup_pregame_alert.py
+Keep:
+- HR_API_BASE
+- HR_PREGAME_WEBHOOK_URL
+- TOP_PER_TEAM=3
+- MIN_HR_SCORE=45
+- ALLOW_UNCONFIRMED_LINEUPS=false

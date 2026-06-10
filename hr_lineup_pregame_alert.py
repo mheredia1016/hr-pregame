@@ -210,6 +210,38 @@ def best_correlated_two_man(a_rows, h_rows):
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0] if candidates and candidates[0][0] >= MIN_HR_SCORE else None
 
+def best_team_stack(team_scored):
+    top = team_scored[:TOP_PER_TEAM]
+    if len(top) < 2:
+        return None, None
+
+    candidates = []
+    for i in range(len(top)):
+        for j in range(i + 1, len(top)):
+            a, b = top[i], top[j]
+            fit = parlay_fit(a, b)
+            candidates.append((fit, a, b))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    best = candidates[0] if candidates else None
+    alt = candidates[1] if len(candidates) > 1 else None
+    return best, alt
+
+def stack_text(title, stack):
+    if not stack:
+        return ""
+    fit, a, b = stack
+    reasons = parlay_reasons(a, b)
+    text = (
+        f"\n\n{title}\n"
+        f"{a[1].get('name')} + {b[1].get('name')}\n"
+        f"Stack Score: `{fit}/100` | Risk: **{risk(fit)}**"
+    )
+    if reasons:
+        text += "\nWhy: " + " • ".join(reasons)
+    return text
+
+
 def parlay_reasons(a, b):
     _, ha, pa = a; _, hb, pb = b
     reasons = []
@@ -228,31 +260,34 @@ def make_game_embed(game, hitters, pitcher_map, lineup_map):
     away = game.get("away", {}).get("abbreviation", "AWAY")
     home = game.get("home", {}).get("abbreviation", "HOME")
     label = game.get("label") or f"{away} @ {home}"
+
     away_rows = attach_lineup_spots(team_rows(hitters, away), lineup_map, "away")
     home_rows = attach_lineup_spots(team_rows(hitters, home), lineup_map, "home")
+
     away_scored = sort_hitters(away_rows, pitcher_map)
     home_scored = sort_hitters(home_rows, pitcher_map)
 
+    away_best, away_alt = best_team_stack(away_scored)
+    home_best, home_alt = best_team_stack(home_scored)
+
     desc = f"**{label} — {fmt_game_time(game.get('gameDate'))}**\nLineups confirmed ✅\n\n"
+
     desc += f"__**{away} Top HR Targets**__\n"
     desc += "\n".join(line_for_hitter(i+1, s, h, p) for i,(s,h,p) in enumerate(away_scored[:TOP_PER_TEAM])) or "No confirmed hitters found."
+    desc += stack_text("💰 **Best HR Stack**", away_best)
+    desc += stack_text("🎯 **Alternate Stack**", away_alt)
+
     desc += "\n\n"
     desc += f"__**{home} Top HR Targets**__\n"
     desc += "\n".join(line_for_hitter(i+1, s, h, p) for i,(s,h,p) in enumerate(home_scored[:TOP_PER_TEAM])) or "No confirmed hitters found."
-    desc += "\n\n"
-
-    best = best_correlated_two_man(away_scored, home_scored)
-    if best:
-        fit, a, b = best
-        reasons = parlay_reasons(a, b)
-        desc += f"💰 **Best Correlated 2-Man HR Parlay**\n{a[1].get('name')} + {b[1].get('name')}\nParlay Fit: `{fit}/100` | Risk: **{risk(fit)}**\n"
-        if reasons: desc += "Why: " + " • ".join(reasons)
+    desc += stack_text("💰 **Best HR Stack**", home_best)
+    desc += stack_text("🎯 **Alternate Stack**", home_alt)
 
     return {
         "title": "🚨 Official Lineup HR Targets",
         "description": desc[:4000],
         "color": 15158332,
-        "footer": {"text": "Score = kHR + xwOBAcon + ISO + hitter HH% + pitcher HH/FB/Brl risk + lineup spot - SwStr"}
+        "footer": {"text": "Top 3 per team + best/alternate same-team HR stacks. Score = kHR + xwOBAcon + ISO + pitcher risk + lineup spot - SwStr"}
     }
 
 def main():
