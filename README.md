@@ -1,14 +1,10 @@
-# HR Lineup Pregame Alert With Same-Team Stacks
+Adds separate 8AM projected HR alerts while keeping official lineup alerts.
 
-Keeps Top 3 HR targets per team and adds:
-- Best HR Stack
-- Alternate Stack
+New Railway variable:
+PROJECTED_PREGAME_WEBHOOK_URL
 
-No new Railway variables required.
-
-Keep:
-- HR_API_BASE
-- HR_PREGAME_WEBHOOK_URL
-- TOP_PER_TEAM=3
-- MIN_HR_SCORE=45
-- ALLOW_UNCONFIRMED_LINEUPS=false
+Optional:
+PROJECTED_PREGAME_HOUR=8
+PROJECTED_PREGAME_MINUTE=0
+PROJECTED_PREGAME_CATCHUP_MINUTES=180
+PROJECTED_TOP_PER_TEAM=3

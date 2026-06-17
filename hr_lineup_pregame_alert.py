@@ -5,6 +5,11 @@ from pathlib import Path
 
 API_BASE = os.getenv("HR_API_BASE", "https://hr-api-production-fed2.up.railway.app").rstrip("/")
 WEBHOOK_URL = os.getenv("HR_PREGAME_WEBHOOK_URL", "").strip()
+PROJECTED_PREGAME_WEBHOOK_URL = os.getenv("PROJECTED_PREGAME_WEBHOOK_URL", "").strip()
+PROJECTED_PREGAME_HOUR = int(os.getenv("PROJECTED_PREGAME_HOUR", "8"))
+PROJECTED_PREGAME_MINUTE = int(os.getenv("PROJECTED_PREGAME_MINUTE", "0"))
+PROJECTED_PREGAME_CATCHUP_MINUTES = int(os.getenv("PROJECTED_PREGAME_CATCHUP_MINUTES", "180"))
+PROJECTED_TOP_PER_TEAM = int(os.getenv("PROJECTED_TOP_PER_TEAM", str(os.getenv("TOP_PER_TEAM", "3"))))
 TZ = ZoneInfo("America/Chicago")
 
 ALLOW_UNCONFIRMED_LINEUPS = os.getenv("ALLOW_UNCONFIRMED_LINEUPS", "false").lower() == "true"
@@ -41,20 +46,23 @@ def get_json_url(url):
 def get_json(path):
     return get_json_url(f"{API_BASE}{path}")
 
-def post_discord(content=None, embeds=None):
-    if not WEBHOOK_URL:
-        raise RuntimeError("Missing HR_PREGAME_WEBHOOK_URL")
+def post_discord(content=None, embeds=None, webhook_url=None):
+    url = (webhook_url or WEBHOOK_URL or "").strip()
+    if not url:
+        raise RuntimeError("Missing Discord webhook URL")
     payload = {}
-    if content: payload["content"] = content
-    if embeds: payload["embeds"] = embeds
-    r = requests.post(WEBHOOK_URL, json=payload, timeout=30)
+    if content:
+        payload["content"] = content
+    if embeds:
+        payload["embeds"] = embeds
+    r = requests.post(url, json=payload, timeout=30)
     r.raise_for_status()
 
 def load_state():
     try:
         if STATE_FILE.exists(): return json.loads(STATE_FILE.read_text())
     except Exception: pass
-    return {"posted":{}}
+    return {"posted":{}, "projectedPostedDate": None}
 
 def save_state(state):
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -210,37 +218,28 @@ def best_correlated_two_man(a_rows, h_rows):
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0] if candidates and candidates[0][0] >= MIN_HR_SCORE else None
 
+
 def best_team_stack(team_scored):
     top = team_scored[:TOP_PER_TEAM]
     if len(top) < 2:
         return None, None
-
     candidates = []
     for i in range(len(top)):
         for j in range(i + 1, len(top)):
             a, b = top[i], top[j]
-            fit = parlay_fit(a, b)
-            candidates.append((fit, a, b))
-
+            candidates.append((parlay_fit(a, b), a, b))
     candidates.sort(key=lambda x: x[0], reverse=True)
-    best = candidates[0] if candidates else None
-    alt = candidates[1] if len(candidates) > 1 else None
-    return best, alt
+    return candidates[0], candidates[1] if len(candidates) > 1 else None
 
 def stack_text(title, stack):
     if not stack:
         return ""
     fit, a, b = stack
     reasons = parlay_reasons(a, b)
-    text = (
-        f"\n\n{title}\n"
-        f"{a[1].get('name')} + {b[1].get('name')}\n"
-        f"Stack Score: `{fit}/100` | Risk: **{risk(fit)}**"
-    )
+    text = f"\n\n{title}\n{a[1].get('name')} + {b[1].get('name')}\nStack Score: `{fit}/100` | Risk: **{risk(fit)}**"
     if reasons:
         text += "\nWhy: " + " • ".join(reasons)
     return text
-
 
 def parlay_reasons(a, b):
     _, ha, pa = a; _, hb, pb = b
@@ -256,38 +255,104 @@ def parlay_reasons(a, b):
     if safe_float(ha.get("swStr")) + safe_float(hb.get("swStr")) <= 25: reasons.append("acceptable combined SwStr")
     return reasons[:5]
 
-def make_game_embed(game, hitters, pitcher_map, lineup_map):
+
+def projected_alert_due(state):
+    if not PROJECTED_PREGAME_WEBHOOK_URL:
+        return False
+    now = datetime.now(TZ)
+    today = now.strftime("%Y-%m-%d")
+    if state.get("projectedPostedDate") == today:
+        return False
+    target = now.replace(hour=PROJECTED_PREGAME_HOUR, minute=PROJECTED_PREGAME_MINUTE, second=0, microsecond=0)
+    if now < target:
+        return False
+    return ((now - target).total_seconds() / 60) <= PROJECTED_PREGAME_CATCHUP_MINUTES
+
+def mark_projected_posted(state):
+    state["projectedPostedDate"] = datetime.now(TZ).strftime("%Y-%m-%d")
+
+def make_projected_game_embed(game, hitters, pitcher_map):
     away = game.get("away", {}).get("abbreviation", "AWAY")
     home = game.get("home", {}).get("abbreviation", "HOME")
     label = game.get("label") or f"{away} @ {home}"
 
+    away_scored = sort_hitters(team_rows(hitters, away), pitcher_map)
+    home_scored = sort_hitters(team_rows(hitters, home), pitcher_map)
+
+    desc = f"**{label} — {fmt_game_time(game.get('gameDate'))}**\nProjected data — lineups not required\n\n"
+
+    desc += f"__**{away} Projected Top HR Targets**__\n"
+    desc += "\n".join(line_for_hitter(i+1, s, h, p) for i,(s,h,p) in enumerate(away_scored[:PROJECTED_TOP_PER_TEAM])) or "No projected hitters found."
+    away_best, away_alt = best_team_stack(away_scored)
+    desc += stack_text("💰 **Projected Best HR Stack**", away_best)
+    desc += stack_text("🎯 **Projected Alternate Stack**", away_alt)
+
+    desc += "\n\n"
+    desc += f"__**{home} Projected Top HR Targets**__\n"
+    desc += "\n".join(line_for_hitter(i+1, s, h, p) for i,(s,h,p) in enumerate(home_scored[:PROJECTED_TOP_PER_TEAM])) or "No projected hitters found."
+    home_best, home_alt = best_team_stack(home_scored)
+    desc += stack_text("💰 **Projected Best HR Stack**", home_best)
+    desc += stack_text("🎯 **Projected Alternate Stack**", home_alt)
+
+    return {
+        "title": "🌅 8AM Projected HR Targets",
+        "description": desc[:4000],
+        "color": 3447003,
+        "footer": {"text": "Projected active-roster data. Official lineup alert will still post later when lineups are confirmed."}
+    }
+
+def post_projected_daily_alerts(games, pitcher_map):
+    if not PROJECTED_PREGAME_WEBHOOK_URL:
+        print("[INFO] PROJECTED_PREGAME_WEBHOOK_URL not set. Skipping projected alert.")
+        return 0
+    posted = 0
+    for game in games:
+        game_pk = game.get("gamePk")
+        if not game_pk:
+            continue
+        try:
+            detail = get_json(f"/api/game/{game_pk}")
+            hitters = detail.get("hitters", [])
+            if not hitters:
+                print(f"[WARN] No projected hitters for game {game_pk}")
+                continue
+            post_discord(embeds=[make_projected_game_embed(game, hitters, pitcher_map)], webhook_url=PROJECTED_PREGAME_WEBHOOK_URL)
+            posted += 1
+            print(f"[INFO] Posted 8AM projected HR alert for game {game_pk}")
+        except Exception as e:
+            print(f"[WARN] Failed projected alert for game {game_pk}: {e}")
+    return posted
+
+
+def make_game_embed(game, hitters, pitcher_map, lineup_map):
+    away = game.get("away", {}).get("abbreviation", "AWAY")
+    home = game.get("home", {}).get("abbreviation", "HOME")
+    label = game.get("label") or f"{away} @ {home}"
     away_rows = attach_lineup_spots(team_rows(hitters, away), lineup_map, "away")
     home_rows = attach_lineup_spots(team_rows(hitters, home), lineup_map, "home")
-
     away_scored = sort_hitters(away_rows, pitcher_map)
     home_scored = sort_hitters(home_rows, pitcher_map)
 
-    away_best, away_alt = best_team_stack(away_scored)
-    home_best, home_alt = best_team_stack(home_scored)
-
     desc = f"**{label} — {fmt_game_time(game.get('gameDate'))}**\nLineups confirmed ✅\n\n"
-
     desc += f"__**{away} Top HR Targets**__\n"
     desc += "\n".join(line_for_hitter(i+1, s, h, p) for i,(s,h,p) in enumerate(away_scored[:TOP_PER_TEAM])) or "No confirmed hitters found."
-    desc += stack_text("💰 **Best HR Stack**", away_best)
-    desc += stack_text("🎯 **Alternate Stack**", away_alt)
-
     desc += "\n\n"
     desc += f"__**{home} Top HR Targets**__\n"
     desc += "\n".join(line_for_hitter(i+1, s, h, p) for i,(s,h,p) in enumerate(home_scored[:TOP_PER_TEAM])) or "No confirmed hitters found."
-    desc += stack_text("💰 **Best HR Stack**", home_best)
-    desc += stack_text("🎯 **Alternate Stack**", home_alt)
+    desc += "\n\n"
+
+    best = best_correlated_two_man(away_scored, home_scored)
+    if best:
+        fit, a, b = best
+        reasons = parlay_reasons(a, b)
+        desc += f"💰 **Best Correlated 2-Man HR Parlay**\n{a[1].get('name')} + {b[1].get('name')}\nParlay Fit: `{fit}/100` | Risk: **{risk(fit)}**\n"
+        if reasons: desc += "Why: " + " • ".join(reasons)
 
     return {
         "title": "🚨 Official Lineup HR Targets",
         "description": desc[:4000],
         "color": 15158332,
-        "footer": {"text": "Top 3 per team + best/alternate same-team HR stacks. Score = kHR + xwOBAcon + ISO + pitcher risk + lineup spot - SwStr"}
+        "footer": {"text": "Score = kHR + xwOBAcon + ISO + hitter HH% + pitcher HH/FB/Brl risk + lineup spot - SwStr"}
     }
 
 def main():
@@ -296,6 +361,12 @@ def main():
     games = games_data.get("games", games_data if isinstance(games_data, list) else [])
     pitcher_map = build_pitcher_map()
     posted = 0
+
+    if projected_alert_due(state):
+        projected_count = post_projected_daily_alerts(games, pitcher_map)
+        mark_projected_posted(state)
+        save_state(state)
+        print(f"[INFO] 8AM projected daily alert complete. Games posted: {projected_count}")
 
     for game in games:
         game_pk = game.get("gamePk")
