@@ -7,6 +7,8 @@ from pathlib import Path
 
 API_BASE = os.getenv("HR_API_BASE", "https://hr-api-production-fed2.up.railway.app").rstrip("/")
 WEBHOOK_URL = os.getenv("HR_PREGAME_WEBHOOK_URL", "").strip()
+RECAP_BOT_URL = os.getenv("RECAP_BOT_URL","").strip().rstrip("/")
+RECAP_BOT_SECRET = os.getenv("RECAP_BOT_SECRET","").strip()
 
 TZ = ZoneInfo("America/Chicago")
 
@@ -234,6 +236,35 @@ def make_game_embed(game, hitters, pitcher_map):
         }
     }
 
+
+
+def send_picks_to_recap_bot(game, away_scored, home_scored):
+    if not RECAP_BOT_URL or not RECAP_BOT_SECRET:
+        return
+    away = game.get("away", {}).get("abbreviation","AWAY")
+    home = game.get("home", {}).get("abbreviation","HOME")
+    players=[]
+    for score,h,p in (away_scored[:TOP_PER_TEAM]+home_scored[:TOP_PER_TEAM]):
+        players.append({
+            "playerId": h.get("playerId") or h.get("id") or h.get("mlbId"),
+            "name": h.get("name"),
+            "team": h.get("team"),
+            "opponent": home if str(h.get("team","")).upper()==away else away,
+            "gamePk": game.get("gamePk"),
+            "score": score,
+            "tier": tag_for_score(score)
+        })
+    try:
+        r=requests.post(
+            f"{RECAP_BOT_URL}/save-picks",
+            headers={"x-recap-secret":RECAP_BOT_SECRET},
+            json={"type":"hr","date":datetime.now(TZ).strftime("%Y-%m-%d"),"players":players},
+            timeout=20
+        )
+        print(f"[RECAP] {r.status_code}")
+    except Exception as e:
+        print(f"[RECAP] Failed: {e}")
+
 def main():
     now_ct = datetime.now(TZ)
 
@@ -271,8 +302,13 @@ def main():
                 print(f"[WARN] No hitters for game {game_pk}")
                 continue
 
+            away = game.get("away", {}).get("abbreviation", "AWAY")
+            home = game.get("home", {}).get("abbreviation", "HOME")
+            away_scored = sort_hitters(team_rows(hitters, away), pitcher_map)
+            home_scored = sort_hitters(team_rows(hitters, home), pitcher_map)
             embed = make_game_embed(game, hitters, pitcher_map)
             post_discord(embeds=[embed])
+            send_picks_to_recap_bot(game, away_scored, home_scored)
             mark_posted(state, game_pk)
             save_state(state)
             print(f"[INFO] Posted game {game_pk}")
