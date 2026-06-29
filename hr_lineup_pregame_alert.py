@@ -10,6 +10,10 @@ PROJECTED_PREGAME_HOUR = int(os.getenv("PROJECTED_PREGAME_HOUR", "8"))
 PROJECTED_PREGAME_MINUTE = int(os.getenv("PROJECTED_PREGAME_MINUTE", "0"))
 PROJECTED_PREGAME_CATCHUP_MINUTES = int(os.getenv("PROJECTED_PREGAME_CATCHUP_MINUTES", "180"))
 PROJECTED_TOP_PER_TEAM = int(os.getenv("PROJECTED_TOP_PER_TEAM", str(os.getenv("TOP_PER_TEAM", "3"))))
+
+RECAP_BOT_URL = os.getenv("RECAP_BOT_URL", "").strip().rstrip("/")
+RECAP_BOT_SECRET = os.getenv("RECAP_BOT_SECRET", "").strip()
+
 TZ = ZoneInfo("America/Chicago")
 
 ALLOW_UNCONFIRMED_LINEUPS = os.getenv("ALLOW_UNCONFIRMED_LINEUPS", "false").lower() == "true"
@@ -218,7 +222,6 @@ def best_correlated_two_man(a_rows, h_rows):
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0] if candidates and candidates[0][0] >= MIN_HR_SCORE else None
 
-
 def best_team_stack(team_scored):
     top = team_scored[:TOP_PER_TEAM]
     if len(top) < 2:
@@ -254,7 +257,6 @@ def parlay_reasons(a, b):
     if (safe_float(ha.get("xwOBAcon")) + safe_float(hb.get("xwOBAcon"))) / 2 >= .380: reasons.append("strong xwOBAcon combo")
     if safe_float(ha.get("swStr")) + safe_float(hb.get("swStr")) <= 25: reasons.append("acceptable combined SwStr")
     return reasons[:5]
-
 
 def projected_alert_due(state):
     if not PROJECTED_PREGAME_WEBHOOK_URL:
@@ -323,7 +325,6 @@ def post_projected_daily_alerts(games, pitcher_map):
             print(f"[WARN] Failed projected alert for game {game_pk}: {e}")
     return posted
 
-
 def make_game_embed(game, hitters, pitcher_map, lineup_map):
     away = game.get("away", {}).get("abbreviation", "AWAY")
     home = game.get("home", {}).get("abbreviation", "HOME")
@@ -355,6 +356,55 @@ def make_game_embed(game, hitters, pitcher_map, lineup_map):
         "footer": {"text": "Score = kHR + xwOBAcon + ISO + hitter HH% + pitcher HH/FB/Brl risk + lineup spot - SwStr"}
     }
 
+def send_picks_to_recap_bot(game, away_scored, home_scored):
+    if not RECAP_BOT_URL or not RECAP_BOT_SECRET:
+        print("[RECAP] Missing RECAP_BOT_URL or RECAP_BOT_SECRET. Skipping.")
+        return
+
+    away = game.get("away", {}).get("abbreviation", "AWAY")
+    home = game.get("home", {}).get("abbreviation", "HOME")
+    players = []
+
+    for score, h, p in (away_scored[:TOP_PER_TEAM] + home_scored[:TOP_PER_TEAM]):
+        players.append({
+            "playerId": h.get("playerId") or h.get("id") or h.get("mlbId"),
+            "name": h.get("name"),
+            "team": h.get("team"),
+            "opponent": home if str(h.get("team", "")).upper() == away else away,
+            "gamePk": game.get("gamePk"),
+            "score": score,
+            "tier": tag(score)
+        })
+
+    players = [p for p in players if p.get("playerId") and p.get("name") and p.get("gamePk")]
+
+    if not players:
+        print("[RECAP] No valid HR picks to send. Missing playerId/name/gamePk.")
+        return
+
+    try:
+        r = requests.post(
+            f"{RECAP_BOT_URL}/save-picks",
+            headers={
+                "Content-Type": "application/json",
+                "x-recap-secret": RECAP_BOT_SECRET
+            },
+            json={
+                "type": "hr",
+                "date": datetime.now(TZ).strftime("%Y-%m-%d"),
+                "players": players
+            },
+            timeout=20
+        )
+
+        if r.ok:
+            print(f"[RECAP] Saved {len(players)} HR picks for game {game.get('gamePk')}")
+        else:
+            print(f"[RECAP] Failed {r.status_code}: {r.text}")
+
+    except Exception as e:
+        print(f"[RECAP] Failed: {e}")
+
 def main():
     state = cleanup_state(load_state())
     games_data = get_json("/api/games")
@@ -382,7 +432,20 @@ def main():
             if not hitters:
                 print(f"[WARN] No hitters for game {game_pk}")
                 continue
+
+            away = game.get("away", {}).get("abbreviation", "AWAY")
+            home = game.get("home", {}).get("abbreviation", "HOME")
+
+            away_rows = attach_lineup_spots(team_rows(hitters, away), lineup_map, "away")
+            home_rows = attach_lineup_spots(team_rows(hitters, home), lineup_map, "home")
+
+            away_scored = sort_hitters(away_rows, pitcher_map)
+            home_scored = sort_hitters(home_rows, pitcher_map)
+
             post_discord(embeds=[make_game_embed(game, hitters, pitcher_map, lineup_map)])
+
+            send_picks_to_recap_bot(game, away_scored, home_scored)
+
             mark_posted(state, game_pk)
             save_state(state)
             posted += 1
